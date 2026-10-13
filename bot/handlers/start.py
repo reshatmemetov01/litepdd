@@ -16,7 +16,7 @@ router = Router()
 
 
 async def continue_funnel(bot: Bot, db: Database, config: Config, user_id: int) -> None:
-    await bot.send_message(user_id, content.t("menu_hint"), reply_markup=keyboards.main_menu(is_admin(user_id, config)))
+    await bot.send_message(user_id, content.t("menu_hint"), reply_markup=keyboards.home_keyboard())
     await bot.send_message(user_id, content.t("about"), reply_markup=keyboards.show())
     await db.add_event(user_id, "about")
 
@@ -27,7 +27,7 @@ async def start_ticket_link(message: Message, command: CommandObject, state: FSM
     """t.me/бот?start=ticket_5 — сразу запускает тест по билету (ссылка под видео-разбором в группе)."""
     await state.clear()
     number = int(command.args.split("_")[1])
-    await message.answer(content.t("menu_hint"), reply_markup=keyboards.main_menu(is_admin(user["user_id"], config)))
+    await message.answer(content.t("menu_hint"), reply_markup=keyboards.home_keyboard())
     if not await start_ticket(bot, db, user["user_id"], questions, number):
         await message.answer(content.TICKET_NOT_FOUND, reply_markup=keyboards.tickets(questions.ticket_numbers()))
 
@@ -42,7 +42,8 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext,
         await db.update_user(uid, source=command.args.strip()[:64])
 
     if user["paid"] and not is_admin(uid, config):
-        await message.answer(content.t("welcome_back_paid"), reply_markup=keyboards.main_menu(is_admin(uid, config)))
+        await message.answer(content.t("welcome_back_paid"), reply_markup=keyboards.home_keyboard())
+        await message.answer(content.t("main_menu"), reply_markup=keyboards.main_menu(False))
         return
 
     welcome = content.t("welcome", name=escape(message.from_user.first_name or "друг"))

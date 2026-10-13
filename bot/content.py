@@ -35,7 +35,7 @@ CHANNEL_PROMPT = (
 )
 WELCOME_BACK_PAID = "С возвращением! 🙌 Разборы — по кнопке «👑 Видеоразборы» в меню."
 
-MENU_HINT = "Меню — внизу 👇"
+MENU_HINT = "Кнопка «Меню» — внизу 👇"
 
 ABOUT = (
     "❤️ <b>Рад тебя видеть!</b>\n\n"
@@ -148,8 +148,8 @@ ACCESS_MANUAL = (
 
 # ------------------------------------------------------------------ Меню
 
+MENU_HOME = "Меню"  # единственная кнопка внизу — открывает главное меню
 MENU_VIDEOS = "👑 Видеоразборы"
-MENU_VIDEOS_OLD = "👑 Видео разборы"  # старая подпись — у кого клавиатура ещё не обновилась
 MENU_TRAINING = "📝 Тренировка"
 MENU_REVIEWS = "👥 Отзывы"
 MENU_FAQ = "❓ Частые вопросы"
@@ -159,7 +159,7 @@ MENU_ADMIN = "🛠 Админка"
 
 COMING_SOON = "Раздел скоро появится 🙂"
 BACK = "⬅️ Назад"
-# Сообщение, в которое превращается раздел после нажатия «Назад»
+# Главное меню: под ним кнопки разделов. Открывается кнопкой «Меню» внизу и по «Назад»
 MAIN_MENU = "<b>Добро пожаловать!</b>\n\nЧтобы продолжить, выбери нужную категорию ⤵️"
 
 REVIEWS_PAGE_SIZE = 5
@@ -466,7 +466,7 @@ TEXTS: dict[str, TextDef] = {
         "legal": "строка про соглашение и политику",
     }),
     "welcome_back_paid": TextDef("Повторный /start у купившего", WELCOME_BACK_PAID, "funnel"),
-    "menu_hint": TextDef("«Меню — внизу»", MENU_HINT, "funnel"),
+    "menu_hint": TextDef("«Кнопка Меню — внизу»", MENU_HINT, "funnel"),
     "promo_ask": TextDef("Запрос промокода", PROMO_ASK, "funnel"),
     "promo_not_found": TextDef("Промокод не найден", PROMO_NOT_FOUND, "funnel"),
     # --- оплата
@@ -482,7 +482,7 @@ TEXTS: dict[str, TextDef] = {
     "access_already_member": TextDef("«Ты уже в группе»", ACCESS_ALREADY_MEMBER, "pay"),
     "access_manual": TextDef("Оплата прошла, ссылка позже", ACCESS_MANUAL, "pay"),
     # --- меню
-    "main_menu": TextDef("«Добро пожаловать» (после «Назад»)", MAIN_MENU, "menu"),
+    "main_menu": TextDef("Главное меню («Добро пожаловать»)", MAIN_MENU, "menu"),
     "faq": TextDef("Частые вопросы", FAQ, "menu", {"contact": "@username поддержки"}),
     "info": TextDef("Информация", INFO, "menu"),
     "support": TextDef("Поддержка", SUPPORT, "menu"),

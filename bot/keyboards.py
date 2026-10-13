@@ -8,28 +8,38 @@ from aiogram.types import (
 from . import content, runtime
 from .config import Config
 
-# ------------------------------------------------------- цвета и эмодзи кнопок
+# ------------------------------------------------------------ оформление кнопок
 #
 # Bot API 9.4+: у кнопки можно задать style (цвет) и icon_custom_emoji_id (премиум-эмодзи
 # перед текстом). Цветов всего три — их задаёт Telegram, свой цвет (например, #FF8800) нельзя.
-# Цвет настраивается для группы кнопок, эмодзи — для отдельной кнопки (админка → «🎨 Кнопки»).
+# В админке («🎨 Оформление») у каждой кнопки можно поменять текст, цвет и премиум-эмодзи,
+# а цвет — ещё и сразу для всей группы. Своя настройка кнопки важнее настройки группы.
 
 STYLES = {
     "primary": "🔵 Синий",
     "success": "🟢 Зелёный",
     "danger": "🔴 Красный",
 }
+PLAIN = "plain"  # у кнопки явно «обычный» цвет, даже если у группы задан другой
 
 BUTTON_GROUPS = {
-    "cta": "Главные (Продолжить, Показать, Получить доступ)",
+    "home": "Кнопка «Меню» внизу",
+    "nav": "Главное меню",
+    "cta": "Воронка (Продолжить, Показать, Получить доступ)",
     "pay": "Оплата (Оплатить по СБП, Оплатить, Я оплатил)",
     "secondary": "Остальные (канал, промокод, поддержка, тренажёр)",
     "back": "«Назад»",
-    "menu": "Нижнее меню",
 }
 
-# ключ кнопки → (текст, группа). Премиум-эмодзи можно поставить на любую из них.
+# ключ кнопки → (стандартный текст, группа)
 BUTTONS: dict[str, tuple[str, str]] = {
+    "home": (content.MENU_HOME, "home"),
+    "menu_videos": (content.MENU_VIDEOS, "nav"),
+    "menu_training": (content.MENU_TRAINING, "nav"),
+    "menu_reviews": (content.MENU_REVIEWS, "nav"),
+    "menu_faq": (content.MENU_FAQ, "nav"),
+    "menu_info": (content.MENU_INFO, "nav"),
+    "menu_support": (content.MENU_SUPPORT, "nav"),
     "continue": ("➡️ Продолжить", "cta"),
     "show": ("⭐ ПОКАЗАТЬ", "cta"),
     "get_access": ("👑 ПОЛУЧИТЬ ДОСТУП", "cta"),
@@ -62,22 +72,44 @@ def strip_leading_emoji(text: str) -> str:
     return text
 
 
-def btn(key: str, **kwargs) -> B:
-    """Кнопка из реестра BUTTONS с цветом группы и премиум-эмодзи из админки."""
-    text, group = BUTTONS[key]
+def button_label(key: str) -> str:
+    """Текст кнопки: из админки, если изменён, иначе стандартный."""
+    return runtime.current().labels.get(key) or BUTTONS[key][0]
+
+
+def button_style(key: str) -> str | None:
     rt = runtime.current()
-    icon = rt.icons.get(key)
-    return B(
-        text=strip_leading_emoji(text) if icon else text,
-        style=rt.styles.get(group),
-        icon_custom_emoji_id=icon,
-        **kwargs,
-    )
+    own = rt.key_styles.get(key)
+    if own == PLAIN:
+        return None
+    return own or rt.styles.get(BUTTONS[key][1])
 
 
-def menu_button(text: str) -> KeyboardButton:
-    # У нижнего меню только цвет: текст кнопки должен совпадать с подписью, по ней бот узнаёт раздел
-    return KeyboardButton(text=text, style=runtime.current().styles.get("menu"))
+def _look(key: str) -> dict:
+    icon = runtime.current().icons.get(key)
+    label = button_label(key)
+    return {
+        "text": strip_leading_emoji(label) if icon else label,
+        "style": button_style(key),
+        "icon_custom_emoji_id": icon,
+    }
+
+
+def btn(key: str, **kwargs) -> B:
+    """Инлайн-кнопка из реестра BUTTONS с оформлением из админки."""
+    return B(**_look(key), **kwargs)
+
+
+def reply_btn(key: str) -> KeyboardButton:
+    return KeyboardButton(**_look(key))
+
+
+def is_home_text(text: str | None) -> bool:
+    """Нажата кнопка «Меню» (с любым текстом, который ей задали в админке, или стандартным)."""
+    if not text:
+        return False
+    norm = lambda t: strip_leading_emoji(t).strip().casefold()
+    return norm(text) in {norm(button_label("home")), norm(content.MENU_HOME)}
 
 
 def inline(*rows: list[B] | B) -> InlineKeyboardMarkup:
@@ -89,7 +121,7 @@ def back_button() -> B:
 
 
 def with_back(markup: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup:
-    """Добавляет «Назад» под сообщение раздела из нижнего меню."""
+    """Добавляет «Назад» (в главное меню) под сообщение раздела."""
     rows = list(markup.inline_keyboard) if markup else []
     return InlineKeyboardMarkup(inline_keyboard=[*rows, [back_button()]])
 
@@ -112,16 +144,21 @@ def info(agreement_url: str = "", privacy_url: str = "") -> InlineKeyboardMarkup
     return inline(*rows, back_button())
 
 
-def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
+def home_keyboard() -> ReplyKeyboardMarkup:
+    """Внизу — одна кнопка «Меню»: быстро вернуться к главному меню из любого места."""
+    return ReplyKeyboardMarkup(keyboard=[[reply_btn("home")]], resize_keyboard=True, is_persistent=True)
+
+
+def main_menu(is_admin: bool) -> InlineKeyboardMarkup:
     rows = [
-        [menu_button(content.MENU_VIDEOS)],
-        [menu_button(content.MENU_TRAINING), menu_button(content.MENU_REVIEWS)],
-        [menu_button(content.MENU_FAQ), menu_button(content.MENU_INFO)],
-        [menu_button(content.MENU_SUPPORT)],
+        btn("menu_videos", callback_data="m:videos"),
+        [btn("menu_training", callback_data="m:training"), btn("menu_reviews", callback_data="m:reviews")],
+        [btn("menu_faq", callback_data="m:faq"), btn("menu_info", callback_data="m:info")],
+        btn("menu_support", callback_data="m:support"),
     ]
     if is_admin:
-        rows.append([KeyboardButton(text=content.MENU_ADMIN)])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+        rows.append(B(text=content.MENU_ADMIN, callback_data="adm:menu"))
+    return inline(*rows)
 
 
 # ---------------------------------------------------------------- воронка
@@ -245,7 +282,7 @@ def admin_menu(pending: int) -> InlineKeyboardMarkup:
         B(text="🔗 Каналы и группа", callback_data="adm:chats"),
         B(text="⭐ Отзывы", callback_data="adm:reviews"),
         B(text="✏️ Тексты", callback_data="txt:menu"),
-        B(text="🎨 Кнопки: цвет и эмодзи", callback_data="btn:menu"),
+        B(text="🎨 Оформление кнопок", callback_data="btn:menu"),
         B(text="⚙️ Настройки", callback_data="set:menu"),
         B(text="🧹 Очистка", callback_data="adm:clean"),
     )
@@ -389,41 +426,68 @@ def admin_text_confirm(key: str) -> InlineKeyboardMarkup:
     ])
 
 
-# ------------------------------------------------------------ админка: кнопки
+# -------------------------------------------------------- админка: оформление
 
-def admin_buttons() -> InlineKeyboardMarkup:
-    styles = runtime.current().styles
-    rows = [B(text=f"{STYLES.get(styles.get(g), '⚪ Обычный').split()[0]} {title}", callback_data=f"btn:g:{g}")
-            for g, title in BUTTON_GROUPS.items()]
-    rows.append(B(text="✨ Премиум-эмодзи на кнопках", callback_data="btn:icons"))
+def style_mark(style: str | None) -> str:
+    return STYLES[style].split()[0] if style in STYLES else "⚪"
+
+
+def admin_design() -> InlineKeyboardMarkup:
+    rows = [B(text=title, callback_data=f"btn:g:{g}") for g, title in BUTTON_GROUPS.items()]
     rows.append(B(text="⬅️ В админку", callback_data="adm:menu"))
     return inline(*rows)
 
 
-def admin_button_group(group: str) -> InlineKeyboardMarkup:
+def admin_design_group(group: str) -> InlineKeyboardMarkup:
+    icons = runtime.current().icons
+    rows = [B(text=f"{style_mark(button_style(key))} {'✨ ' if key in icons else ''}{button_label(key)}",
+              callback_data=f"btn:b:{key}")
+            for key, (_, g) in BUTTONS.items() if g == group]
+    rows.append(B(text="🎨 Цвет сразу для всей группы", callback_data=f"btn:gc:{group}"))
+    rows.append(B(text="⬅️ Назад", callback_data="btn:menu"))
+    return inline(*rows)
+
+
+def admin_group_color(group: str) -> InlineKeyboardMarkup:
     current = runtime.current().styles.get(group)
     choices = [*STYLES.items(), ("none", "⚪ Обычный (как в Telegram)")]
     rows = [B(text=("• " if (value == current or (value == "none" and not current)) else "") + title,
               callback_data=f"btn:s:{group}:{value}", style=value if value in STYLES else None)
             for value, title in choices]
-    rows.append(B(text="⬅️ Назад", callback_data="btn:menu"))
+    rows.append(B(text="⬅️ Назад", callback_data=f"btn:g:{group}"))
     return inline(*rows)
 
 
-def admin_icons() -> InlineKeyboardMarkup:
-    icons = runtime.current().icons
-    rows = [B(text=("✨ " if key in icons else "") + text, callback_data=f"btn:i:{key}")
-            for key, (text, _) in BUTTONS.items()]
-    rows.append(B(text="⬅️ Назад", callback_data="btn:menu"))
-    return inline(*rows)
-
-
-def admin_icon(key: str, has_icon: bool) -> InlineKeyboardMarkup:
-    rows = []
-    if has_icon:
+def admin_button(key: str) -> InlineKeyboardMarkup:
+    rt = runtime.current()
+    rows = [
+        btn(key, callback_data=f"btn:b:{key}"),  # пример: так кнопку видят клиенты
+        B(text="✏️ Изменить текст", callback_data=f"btn:t:{key}"),
+        B(text="🎨 Изменить цвет", callback_data=f"btn:c:{key}"),
+        B(text="✨ Премиум-эмодзи", callback_data=f"btn:i:{key}"),
+    ]
+    if key in rt.labels:
+        rows.append(B(text="↩️ Вернуть стандартный текст", callback_data=f"btn:tr:{key}"))
+    if key in rt.icons:
         rows.append(B(text="🗑 Убрать премиум-эмодзи", callback_data=f"btn:x:{key}"))
-    rows.append(B(text="⬅️ Назад", callback_data="btn:icons"))
+    rows.append(B(text="⬅️ Назад", callback_data=f"btn:g:{BUTTONS[key][1]}"))
     return inline(*rows)
+
+
+def admin_button_color(key: str) -> InlineKeyboardMarkup:
+    own = runtime.current().key_styles.get(key)
+    group_style = runtime.current().styles.get(BUTTONS[key][1])
+    choices = [*STYLES.items(), (PLAIN, "⚪ Обычный (как в Telegram)"),
+               ("group", f"{style_mark(group_style)} Как у группы")]
+    rows = [B(text=("• " if value == (own or "group") else "") + title,
+              callback_data=f"btn:cs:{key}:{value}", style=value if value in STYLES else None)
+            for value, title in choices]
+    rows.append(B(text="⬅️ Назад", callback_data=f"btn:b:{key}"))
+    return inline(*rows)
+
+
+def admin_button_back(key: str) -> InlineKeyboardMarkup:
+    return inline(B(text="⬅️ Назад", callback_data=f"btn:b:{key}"))
 
 
 # --------------------------------------------------------- админка: настройки

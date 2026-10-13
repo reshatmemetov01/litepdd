@@ -127,6 +127,11 @@ class MockSession(BaseSession):
     def of(self, kind, chat_id: int | None = None) -> list:
         return [r for r in self.requests if isinstance(r, kind) and (chat_id is None or r.chat_id == chat_id)]
 
+    def screen(self, chat_id: int):
+        """Последнее, что видит человек: новое сообщение или изменённое (раздел открывается на месте)."""
+        return [r for r in self.requests if isinstance(r, (SendMessage, EditMessageText))
+                and r.chat_id == chat_id][-1]
+
     def alerts(self) -> list[str]:
         return [r.text for r in self.of(AnswerCallbackQuery) if r.text]
 
@@ -216,6 +221,11 @@ class Harness:
             message=self._msg(uid, text="old"),
         ))
 
+    async def section(self, uid: int, name: str):
+        """Открыть раздел кнопкой главного меню; возвращает экран раздела."""
+        await self.click(uid, f"m:{name}")
+        return self.s.screen(uid)
+
     async def force_followup(self, uid: int) -> int:
         await self.db.update_user(uid, next_followup_at=int(time.time()) - 1)
         return await process_due(self.bot, self.db, self.config)
@@ -288,8 +298,7 @@ async def scenario_purchase(h: Harness) -> None:
 
     # кнопка «Поддержка» в меню
     s.clear()
-    await h.text(uid, content.MENU_SUPPORT)
-    support_msg = s.of(SendMessage, uid)[0]
+    support_msg = await h.section(uid, "support")
     assert support_msg.reply_markup.inline_keyboard[0][0].url == "https://t.me/support_lite"
 
     # промокод → не найден
@@ -334,11 +343,11 @@ async def scenario_purchase(h: Harness) -> None:
 
     # «Видео разборы» купившему → ссылка; если уже в канале — без новой ссылки
     s.clear()
-    await h.text(uid, content.MENU_VIDEOS)
+    await h.click(uid, "m:videos")
     assert any("Твоя ссылка" in t for t in s.texts(uid))
     s.members.add((-100500, uid))
     s.clear()
-    await h.text(uid, content.MENU_VIDEOS)
+    await h.click(uid, "m:videos")
     assert content.ACCESS_ALREADY_MEMBER in s.texts(uid) and not s.of(CreateChatInviteLink)
 
     # второй пользователь дошёл до оплаты и не купил
@@ -415,15 +424,16 @@ async def scenario_admin_retest(h: Harness) -> None:
         await h.click(ADMIN, f"adm:pay_ok:{n}")
         assert any("СПАСИБО ЗА ПОКУПКУ" in t for t in s.texts(ADMIN)), n
     assert (await db.get_user(ADMIN))["paid"]
-    # купил, но «Видеоразборы» всё равно показывают оффер (и старая подпись кнопки тоже работает)
-    for label in (content.MENU_VIDEOS, content.MENU_VIDEOS_OLD):
-        s.clear()
-        await h.text(ADMIN, label)
-        assert any("Стоимость" in t for t in s.texts(ADMIN)), label
-        if label == content.MENU_VIDEOS_OLD:  # старая кнопка → бот присылает обновлённое меню
-            menus = [r for r in s.of(SendMessage, ADMIN) if r.text == content.MENU_HINT]
-            assert menus and menus[0].reply_markup.keyboard[0][0].text == "👑 Видеоразборы"
-    assert content.MENU_VIDEOS == "👑 Видеоразборы"
+    # купил, но «Видеоразборы» всё равно показывают оффер
+    s.clear()
+    await h.click(ADMIN, "m:videos")
+    assert any("Стоимость" in t for t in s.texts(ADMIN))
+    # кнопка старого нижнего меню тоже работает и заменяет его одной кнопкой «Меню»
+    s.clear()
+    await h.text(ADMIN, "👑 Видео разборы")
+    assert any("Стоимость" in t for t in s.texts(ADMIN))
+    hint = [r for r in s.of(SendMessage, ADMIN) if r.text == content.MENU_HINT][0]
+    assert [[b.text for b in row] for row in hint.reply_markup.keyboard] == [["Меню"]]
 
 
 async def scenario_group_silence(h: Harness) -> None:
@@ -605,50 +615,60 @@ async def scenario_menu(h: Harness) -> None:
     def is_back(row):
         return row[0].callback_data == "menu:back" and row[0].text == content.BACK
 
-    # у каждого раздела нижнего меню последняя кнопка — «Назад»
-    for item in (content.MENU_VIDEOS, content.MENU_TRAINING, content.MENU_REVIEWS,
-                 content.MENU_FAQ, content.MENU_INFO, content.MENU_SUPPORT):
-        s.clear()
-        await h.text(uid, item)
-        assert is_back(last_markup_rows()[-1]), item
+    # внизу — одна кнопка «Меню»
+    hint = [r for r in s.of(SendMessage, uid) if r.text == content.MENU_HINT][0]
+    assert [[b.text for b in row] for row in hint.reply_markup.keyboard] == [["Меню"]]
 
-    # «Видео разборы» — оффер с кнопками оплаты и «Назад»
+    # «Меню» → «Добро пожаловать!» с инлайн-кнопками разделов (у клиента нет «Админки»)
     s.clear()
-    await h.text(uid, content.MENU_VIDEOS)
-    rows = last_markup_rows()
+    await h.text(uid, "Меню")
+    menu = s.of(SendMessage, uid)[0]
+    assert menu.text == content.MAIN_MENU
+    assert [[b.callback_data for b in row] for row in menu.reply_markup.inline_keyboard] == [
+        ["m:videos"], ["m:training", "m:reviews"], ["m:faq", "m:info"], ["m:support"]]
+    assert buttons_of(menu)[0].text == "👑 Видеоразборы"
+    s.clear()
+    await h.text(ADMIN, "/menu")
+    assert buttons_of(s.of(SendMessage, ADMIN)[0])[-1].callback_data == "adm:menu"
+
+    def is_back(row):
+        return row[0].callback_data == "menu:back" and row[0].text == content.BACK
+
+    # раздел открывается в том же сообщении, последняя кнопка — «Назад»
+    for name in ("training", "reviews", "faq", "info", "support"):
+        s.clear()
+        screen = await h.section(uid, name)
+        assert isinstance(screen, EditMessageText) and is_back(screen.reply_markup.inline_keyboard[-1]), name
+
+    # «Видеоразборы» — оффер с кнопками оплаты и «Назад»
+    s.clear()
+    rows = (await h.section(uid, "videos")).reply_markup.inline_keyboard
     assert rows[0][0].callback_data == "pay:sbp" and is_back(rows[-1])
 
     # «Частые вопросы» — с юзернеймом поддержки
-    s.clear()
-    await h.text(uid, content.MENU_FAQ)
-    faq = s.of(SendMessage, uid)[0].text
+    faq = (await h.section(uid, "faq")).text
     assert "Частые вопросы" in faq and "@support_lite" in faq and "Эльдар" not in faq
 
     # «Информация» — имя автора из настроек, ссылки на документы
-    s.clear()
-    await h.text(uid, content.MENU_INFO)
-    msg = s.of(SendMessage, uid)[0]
+    msg = await h.section(uid, "info")
     assert "Меня зовут Автор Тестов" in msg.text and "Эльдар" not in msg.text
     urls = [r[0].url for r in msg.reply_markup.inline_keyboard[:2]]
     assert urls == [AGREEMENT, PRIVACY]
 
-    # «Назад» не удаляет сообщение, а превращает его в «Добро пожаловать!»
+    # «Назад» превращает сообщение раздела обратно в главное меню
     s.clear()
     await h.click(uid, "menu:back")
     edits = [r for r in s.requests if isinstance(r, EditMessageText)]
-    assert edits and edits[0].text == content.MAIN_MENU and edits[0].reply_markup is None
+    assert edits and edits[0].text == content.MAIN_MENU
+    assert edits[0].reply_markup.inline_keyboard[0][0].callback_data == "m:videos"
 
     # отзывы: пусто → админ добавляет → пользователь видит → админ удаляет
-    s.clear()
-    await h.text(uid, content.MENU_REVIEWS)
-    assert s.texts(uid)[0] == content.REVIEWS_EMPTY
+    assert (await h.section(uid, "reviews")).text == content.REVIEWS_EMPTY
     for i in range(7):
         await h.click(ADMIN, "adm:rev_add")
         await h.text(ADMIN, f"Сдал с первого раза <{i}>")
         await h.text(ADMIN, f"@student{i}")
-    s.clear()
-    await h.text(uid, content.MENU_REVIEWS)
-    page1 = s.of(SendMessage, uid)[0]
+    page1 = await h.section(uid, "reviews")
     assert "@student6" in page1.text and "&lt;6&gt;" in page1.text and "(стр. 1/2)" in page1.text
     assert page1.reply_markup.inline_keyboard[0][0].callback_data == "rev:1"
     s.clear()
@@ -716,8 +736,7 @@ async def scenario_exam(h: Harness) -> None:
     assert any("Меня зовут Автор Тестов" in t for t in s.texts(uid))
 
     s.clear()
-    await h.text(uid, content.MENU_TRAINING)
-    assert any("Экзамен" in t for t in s.texts(uid))
+    assert "Экзамен" in (await h.section(uid, "training")).text
 
     # 3 ошибки → экзамен окончен, предлагаем доступ
     await h.click(uid, "ex:start")
@@ -900,9 +919,7 @@ async def scenario_settings(h: Harness) -> None:
     await h.click(ADMIN, "set:e:author_name")
     await h.text(ADMIN, "Мария")
     assert (await db.get_setting("profile"))["author_name"] == "Мария"
-    s.clear()
-    await h.text(uid, content.MENU_INFO)
-    assert "Меня зовут Мария" in s.texts(uid)[0]
+    assert "Меня зовут Мария" in (await h.section(uid, "info")).text
 
     # username поддержки: проверка формата, @ и ссылка t.me убираются
     await h.click(ADMIN, "set:e:manager_username")
@@ -921,9 +938,7 @@ async def scenario_settings(h: Harness) -> None:
 
     # ссылку на соглашение убрали → ни кнопки, ни упоминания
     await h.click(ADMIN, "set:clear:agreement_url")
-    s.clear()
-    await h.text(uid, content.MENU_INFO)
-    assert [b.url for b in buttons_of(s.of(SendMessage, uid)[0]) if b.url] == [PRIVACY]
+    assert [b.url for b in buttons_of(await h.section(uid, "info")) if b.url] == [PRIVACY]
     s.clear()
     await h.click(uid, "f:offer")
     offer = s.texts(uid)[0]
@@ -942,28 +957,70 @@ async def scenario_settings(h: Harness) -> None:
 async def scenario_buttons(h: Harness) -> None:
     db, s, uid = h.db, h.s, 1401
 
-    # цвет группы «Главные» → зелёный, «Нижнее меню» → синий
+    # раздел «Оформление»: группы → кнопки
+    s.clear()
+    await h.click(ADMIN, "adm:menu")
+    assert "btn:menu" in [b.callback_data for b in buttons_of(s.screen(ADMIN))]
     await h.click(ADMIN, "btn:menu")
-    await h.click(ADMIN, "btn:g:cta")
+    assert "Оформление" in s.screen(ADMIN).text
+    await h.click(ADMIN, "btn:g:nav")
+    assert [b.callback_data for b in buttons_of(s.screen(ADMIN))][:2] == ["btn:b:menu_videos", "btn:b:menu_training"]
+
+    # цвет группы «Воронка» → зелёный, кнопки «Меню» внизу → синий
+    await h.click(ADMIN, "btn:gc:cta")
     await h.click(ADMIN, "btn:s:cta:success")
-    await h.click(ADMIN, "btn:s:menu:primary")
+    await h.click(ADMIN, "btn:s:home:primary")
     await h.click(ADMIN, "btn:s:cta:purple")  # такого цвета в Telegram нет — игнорируем
-    assert await db.get_setting("button_styles") == {"cta": "success", "menu": "primary"}
+    assert await db.get_setting("button_styles") == {"cta": "success", "home": "primary"}
 
     s.clear()
     await h.text(uid, "/start")
     welcome = buttons_of(s.of(SendMessage, uid)[0])
     assert welcome[0].style is None and welcome[1].style == "success"    # канал обычный, «Продолжить» зелёный
     await h.click(uid, "go:continue")
-    menu = [r for r in s.of(SendMessage, uid) if r.text == content.MENU_HINT][0]
-    assert all(b.style == "primary" for b in buttons_of(menu))
+    hint = [r for r in s.of(SendMessage, uid) if r.text == content.MENU_HINT][0]
+    assert all(b.style == "primary" for b in buttons_of(hint))
     s.clear()
     await h.click(uid, "f:offer")
     pay = buttons_of(s.of(SendMessage, uid)[0])
     assert pay[0].text == "💳 Оплатить по СБП" and pay[0].style is None   # группа «Оплата» не менялась
 
+    # своя настройка кнопки важнее группы: «Показать» — красная, «Продолжить» — обычная
+    await h.click(ADMIN, "btn:b:show")
+    await h.click(ADMIN, "btn:c:show")
+    await h.click(ADMIN, "btn:cs:show:danger")
+    await h.click(ADMIN, "btn:cs:continue:plain")
+    preview = buttons_of(s.screen(ADMIN))[0]   # первая кнопка экрана — пример, как её видят клиенты
+    assert preview.style is None and preview.text == "➡️ Продолжить"
+    s.clear()
+    await h.click(uid, "go:continue")
+    assert buttons_of([r for r in s.of(SendMessage, uid) if r.reply_markup and "Рад тебя" in r.text][0])[0].style == "danger"
+    await h.click(ADMIN, "btn:cs:show:group")   # «как у группы»
+    assert await db.get_setting("button_key_styles") == {"continue": "plain"}
+
+    # текст кнопки: «Подробнее» вместо «Показать»; переименовали кнопку «Меню» — она работает по-новому и по-старому
+    await h.click(ADMIN, "btn:t:show")
+    await h.text(ADMIN, "многострочный\nтекст")
+    assert "одной строкой" in last_text(s, ADMIN)
+    await h.text(ADMIN, "🔎 Подробнее")
+    s.clear()
+    await h.click(uid, "go:continue")
+    assert buttons_of([r for r in s.of(SendMessage, uid) if r.reply_markup and "Рад тебя" in r.text][0])[0].text == "🔎 Подробнее"
+    await h.click(ADMIN, "btn:t:home")
+    await h.text(ADMIN, "🏠 Домой")
+    s.clear()
+    await h.text(uid, "/start ticket_1")
+    hint = [r for r in s.of(SendMessage, uid) if r.text == content.MENU_HINT][0]
+    assert buttons_of(hint)[0].text == "🏠 Домой"
+    for label in ("🏠 Домой", "Меню"):
+        s.clear()
+        await h.text(uid, label)
+        assert s.texts(uid) == [content.MAIN_MENU], label
+    await h.click(ADMIN, "btn:tr:show")
+    assert await db.get_setting("button_texts") == {"home": "🏠 Домой"}
+
     # премиум-эмодзи на «Получить доступ»: присылаем эмодзи → бот проверяет и сохраняет
-    await h.click(ADMIN, "btn:icons")
+    await h.click(ADMIN, "btn:b:get_access")
     await h.click(ADMIN, "btn:i:get_access")
     await h.text(ADMIN, "просто текст")
     assert "button_icons" not in await db.get_settings(("button_icons",))
@@ -1002,15 +1059,15 @@ async def scenario_buttons(h: Harness) -> None:
     # премиум-эмодзи в тексте при отказе Telegram заменяются обычными
     s.reject_premium = False
     await h.click(ADMIN, "txt:e:main_menu")
-    await h.rich(ADMIN, "🔥 Меню", [MessageEntity(type="custom_emoji", offset=0, length=2,
-                                                 custom_emoji_id="5368324170671202286")])
+    await h.rich(ADMIN, "🔥 Главное", [MessageEntity(type="custom_emoji", offset=0, length=2,
+                                                    custom_emoji_id="5368324170671202286")])
     await h.click(ADMIN, "txt:s:main_menu")
     assert "<tg-emoji" in (await db.get_setting("texts"))["main_menu"]
     s.reject_premium = True
     s.clear()
     await h.click(uid, "menu:back")
     edits = [r for r in s.requests if isinstance(r, EditMessageText)]
-    assert edits[-1].text == "🔥 Меню"
+    assert edits[-1].text == "🔥 Главное"
 
     # сброс цвета и эмодзи
     s.reject_premium = False
@@ -1037,12 +1094,8 @@ async def scenario_no_links(h: Harness) -> None:
     s.clear()
     await h.click(uid, "pay:sbp")
     assert "Оплата скоро будет подключена" in s.texts(uid)[0]
-    s.clear()
-    await h.text(uid, content.MENU_INFO)
-    assert [b.callback_data for b in buttons_of(s.of(SendMessage, uid)[0])] == ["menu:back"]
-    s.clear()
-    await h.text(uid, content.MENU_SUPPORT)
-    assert content.SUPPORT_NOT_SET in s.texts(uid)
+    assert [b.callback_data for b in buttons_of(await h.section(uid, "info"))] == ["menu:back"]
+    assert (await h.section(uid, "support")).text == content.SUPPORT_NOT_SET
     # покупка без закрытой группы → «пришлю ссылку позже», админу — предупреждение
     await h.click(uid, "pay:sent")
     s.clear()

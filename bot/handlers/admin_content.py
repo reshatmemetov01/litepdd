@@ -1,4 +1,4 @@
-"""Админка: «✏️ Тексты», «🎨 Кнопки: цвет и эмодзи», «⚙️ Настройки».
+"""Админка: «✏️ Тексты», «🎨 Оформление кнопок», «⚙️ Настройки».
 
 Всё хранится в таблице settings (см. runtime.py) и применяется сразу, без перезапуска.
 """
@@ -18,6 +18,7 @@ from ..config import EDITABLE_FIELDS, Config
 from ..db import Database
 from ..services import visible_length
 from .admin import IsAdmin
+from .menu import OLD_REPLY_BUTTONS as OLD_MENU_LABELS
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -28,6 +29,7 @@ router.callback_query.filter(IsAdmin())
 class ContentForm(StatesGroup):
     text = State()
     icon = State()
+    label = State()
     setting = State()
 
 
@@ -227,45 +229,85 @@ async def _apply_profile_text(bot: Bot, key: str) -> None:
         log.exception("Не удалось обновить описание бота")
 
 
-# =================================================================== кнопки
+# =============================================================== оформление
 
-BUTTONS_HELP = (
-    "🎨 <b>Кнопки: цвет и эмодзи</b>\n\n"
-    "<b>Цвет</b> задаётся для группы кнопок. Telegram разрешает только 3 цвета: "
-    "🔵 синий, 🟢 зелёный, 🔴 красный — или обычный (как в приложении). Свой оттенок выбрать нельзя. "
-    "Цвет видят пользователи свежих версий Telegram, в старых кнопка будет обычной.\n\n"
-    "<b>Премиум-эмодзи</b> ставится перед текстом конкретной кнопки (вместо обычного эмодзи). "
-    "Работает, только если у владельца бота есть <b>Telegram Premium</b> или у бота есть "
-    "купленный на Fragment username. Иначе бот покажет кнопку без него."
+DESIGN_HELP = (
+    "🎨 <b>Оформление кнопок</b>\n\n"
+    "Выбери группу, потом кнопку — у неё можно поменять <b>текст</b>, <b>цвет</b> и "
+    "<b>премиум-эмодзи</b>. Цвет можно задать и сразу всей группе; своя настройка кнопки важнее.\n\n"
+    "• <b>Цвета</b> — только те, что разрешает Telegram: 🔵 синий, 🟢 зелёный, 🔴 красный или обычный. "
+    "Свой оттенок выбрать нельзя. В старых версиях Telegram кнопка будет обычной.\n"
+    "• <b>Премиум-эмодзи</b> встаёт перед текстом вместо обычного эмодзи. Работает, только если у "
+    "владельца бота есть <b>Telegram Premium</b> или у бота есть купленный на Fragment username — "
+    "иначе бот покажет кнопку без него."
 )
 
 
-async def _buttons_text() -> str:
-    text = BUTTONS_HELP
+async def _design_text() -> str:
+    text = DESIGN_HELP
     if emoji_fallback.last_failure["ts"]:
         text += ("\n\n⚠️ <i>Недавно Telegram не пропустил премиум-эмодзи — бот отправил сообщение без них. "
                  "Проверь Premium у владельца бота.</i>")
     return text
 
 
+def _button_text(key: str) -> str:
+    rt = runtime.current()
+    default, group = keyboards.BUTTONS[key]
+    own = rt.key_styles.get(key)
+    if own:
+        color = keyboards.STYLES.get(own, "⚪ Обычный")
+    else:
+        color = keyboards.STYLES.get(rt.styles.get(group), "⚪ Обычный") + " (как у группы)"
+    lines = [
+        f"🔘 <b>Кнопка «{escape(keyboards.button_label(key))}»</b>",
+        f"Группа: {escape(keyboards.BUTTON_GROUPS[group])}\n",
+        f"<b>Текст:</b> {escape(keyboards.button_label(key))}"
+        + (f" <i>(стандартный: {escape(default)})</i>" if key in rt.labels else " <i>(стандартный)</i>"),
+        f"<b>Цвет:</b> {color}",
+        f"<b>Премиум-эмодзи:</b> {'✨ есть' if key in rt.icons else 'нет'}",
+        "\n👇 Первая кнопка ниже — так её видят клиенты.",
+    ]
+    return "\n".join(lines)
+
+
+async def _send_button_screen(bot: Bot, chat_id: int, key: str) -> None:
+    await bot.send_message(chat_id, _button_text(key), reply_markup=keyboards.admin_button(key))
+
+
+def _valid_key(key: str) -> bool:
+    return key in keyboards.BUTTONS
+
+
 @router.callback_query(F.data == "btn:menu")
-async def buttons_menu(callback: CallbackQuery, state: FSMContext) -> None:
+async def design_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
-    await _show(callback, await _buttons_text(), keyboards.admin_buttons())
+    await _show(callback, await _design_text(), keyboards.admin_design())
 
 
 @router.callback_query(F.data.startswith("btn:g:"))
-async def button_group(callback: CallbackQuery) -> None:
+async def design_group(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     group = callback.data.split(":", 2)[2]
     await callback.answer()
     if group in keyboards.BUTTON_GROUPS:
-        await _show(callback, f"🎨 Цвет: <b>{escape(keyboards.BUTTON_GROUPS[group])}</b>",
-                    keyboards.admin_button_group(group))
+        await _show(callback, f"🎨 <b>{escape(keyboards.BUTTON_GROUPS[group])}</b>\n\nВыбери кнопку:",
+                    keyboards.admin_design_group(group))
+
+
+@router.callback_query(F.data.startswith("btn:gc:"))
+async def group_color(callback: CallbackQuery) -> None:
+    group = callback.data.split(":", 2)[2]
+    await callback.answer()
+    if group in keyboards.BUTTON_GROUPS:
+        await _show(callback, f"🎨 Цвет для всей группы «{escape(keyboards.BUTTON_GROUPS[group])}»\n\n"
+                              "<i>Кнопки, у которых цвет задан отдельно, останутся своего цвета.</i>",
+                    keyboards.admin_group_color(group))
 
 
 @router.callback_query(F.data.startswith("btn:s:"))
-async def button_style(callback: CallbackQuery, db: Database, config: Config,
+async def group_color_set(callback: CallbackQuery, db: Database, config: Config,
         base_config: Config) -> None:
     _, _, group, value = callback.data.split(":")
     if group not in keyboards.BUTTON_GROUPS or (value != "none" and value not in keyboards.STYLES):
@@ -279,21 +321,119 @@ async def button_style(callback: CallbackQuery, db: Database, config: Config,
     await db.set_setting("button_styles", styles)
     await _reload(db, base_config)
     await callback.answer("Сохранено ✅")
-    await _show(callback, await _buttons_text(), keyboards.admin_buttons())
+    await _show(callback, f"🎨 <b>{escape(keyboards.BUTTON_GROUPS[group])}</b>\n\nВыбери кнопку:",
+                keyboards.admin_design_group(group))
 
 
-@router.callback_query(F.data == "btn:icons")
-async def button_icons(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data.startswith("btn:b:"))
+async def button_screen(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
+    key = callback.data.split(":", 2)[2]
     await callback.answer()
-    await _show(callback, "✨ <b>Премиум-эмодзи на кнопках</b>\n\nВыбери кнопку. ✨ — эмодзи уже задано.",
-                keyboards.admin_icons())
+    if _valid_key(key):
+        await _show(callback, _button_text(key), keyboards.admin_button(key))
 
+
+async def _update_setting_dict(db: Database, name: str, key: str, value: str | None) -> None:
+    data = await db.get_setting(name, {}) or {}
+    if value is None:
+        data.pop(key, None)
+    else:
+        data[key] = value
+    await db.set_setting(name, data)
+
+
+# ------------------------------------------------------------------ цвет кнопки
+
+@router.callback_query(F.data.startswith("btn:c:"))
+async def button_color(callback: CallbackQuery) -> None:
+    key = callback.data.split(":", 2)[2]
+    await callback.answer()
+    if _valid_key(key):
+        await _show(callback, f"🎨 Цвет кнопки «{escape(keyboards.button_label(key))}»",
+                    keyboards.admin_button_color(key))
+
+
+@router.callback_query(F.data.startswith("btn:cs:"))
+async def button_color_set(callback: CallbackQuery, db: Database, config: Config,
+        base_config: Config) -> None:
+    _, _, key, value = callback.data.split(":")
+    if not _valid_key(key) or value not in (*keyboards.STYLES, keyboards.PLAIN, "group"):
+        await callback.answer()
+        return
+    await _update_setting_dict(db, "button_key_styles", key, None if value == "group" else value)
+    await _reload(db, base_config)
+    await callback.answer("Сохранено ✅")
+    await _show(callback, _button_text(key), keyboards.admin_button(key))
+
+
+# ------------------------------------------------------------------ текст кнопки
+
+@router.callback_query(F.data.startswith("btn:t:"))
+async def button_label_edit(callback: CallbackQuery, state: FSMContext) -> None:
+    key = callback.data.split(":", 2)[2]
+    if not _valid_key(key):
+        await callback.answer()
+        return
+    await state.set_state(ContentForm.label)
+    await state.update_data(label_key=key)
+    await callback.answer()
+    hint = ("\n\n<i>Это кнопка внизу экрана — бот узнаёт её по тексту, поэтому новый текст сразу "
+            "заработает, а у кого осталась старая кнопка «Меню», она тоже продолжит работать.</i>"
+            if key == "home" else "")
+    await callback.message.answer(
+        f"✏️ Пришли новый текст для кнопки «{escape(keyboards.button_label(key))}» "
+        f"(до {LABEL_LIMIT} символов, одной строкой). Эмодзи в начале — по желанию.{hint}",
+        reply_markup=keyboards.admin_button_back(key),
+    )
+
+
+LABEL_LIMIT = 40
+
+
+@router.message(StateFilter(ContentForm.label))
+async def button_label_input(message: Message, state: FSMContext, bot: Bot, db: Database,
+                             base_config: Config) -> None:
+    key = (await state.get_data()).get("label_key")
+    if not _valid_key(key):
+        await state.clear()
+        return
+    label = (message.text or "").strip()
+    if not label or "\n" in label or len(label) > LABEL_LIMIT:
+        await message.answer(f"⚠️ Нужен текст одной строкой, до {LABEL_LIMIT} символов. Пришли ещё раз.",
+                             reply_markup=keyboards.admin_button_back(key))
+        return
+    if key == "home" and label in OLD_MENU_LABELS:
+        await message.answer("⚠️ Этот текст занят кнопкой раздела — выбери другой.",
+                             reply_markup=keyboards.admin_button_back(key))
+        return
+    await _update_setting_dict(db, "button_texts", key, None if label == keyboards.BUTTONS[key][0] else label)
+    await _reload(db, base_config)
+    await state.clear()
+    await message.answer("✅ Текст кнопки сохранён.")
+    if key == "home":  # обновляем кнопку внизу у админа сразу
+        await message.answer(content.t("menu_hint"), reply_markup=keyboards.home_keyboard())
+    await _send_button_screen(bot, message.chat.id, key)
+
+
+@router.callback_query(F.data.startswith("btn:tr:"))
+async def button_label_reset(callback: CallbackQuery, db: Database, base_config: Config) -> None:
+    key = callback.data.split(":", 2)[2]
+    if not _valid_key(key):
+        await callback.answer()
+        return
+    await _update_setting_dict(db, "button_texts", key, None)
+    await _reload(db, base_config)
+    await callback.answer("Вернул стандартный текст")
+    await _show(callback, _button_text(key), keyboards.admin_button(key))
+
+
+# ---------------------------------------------------------- премиум-эмодзи кнопки
 
 @router.callback_query(F.data.startswith("btn:i:"))
 async def button_icon(callback: CallbackQuery, state: FSMContext) -> None:
     key = callback.data.split(":", 2)[2]
-    if key not in keyboards.BUTTONS:
+    if not _valid_key(key):
         await callback.answer()
         return
     await state.set_state(ContentForm.icon)
@@ -301,11 +441,11 @@ async def button_icon(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     current = runtime.current().icons.get(key)
     await callback.message.answer(
-        f"✨ Кнопка «{escape(keyboards.BUTTONS[key][0])}»\n\n"
+        f"✨ Кнопка «{escape(keyboards.button_label(key))}»\n\n"
         + (f"Сейчас: <code>{current}</code>\n\n" if current else "")
         + "Пришли <b>одно премиум-эмодзи</b> (для этого нужен Telegram Premium у тебя) "
         "или его ID числом. Оно встанет перед текстом кнопки вместо обычного эмодзи.",
-        reply_markup=keyboards.admin_icon(key, bool(current)),
+        reply_markup=keyboards.admin_button_back(key),
     )
 
 
@@ -318,29 +458,29 @@ def extract_custom_emoji_id(message: Message) -> str | None:
 
 
 @router.message(StateFilter(ContentForm.icon))
-async def button_icon_input(message: Message, state: FSMContext, bot: Bot, db: Database, config: Config,
-        base_config: Config) -> None:
+async def button_icon_input(message: Message, state: FSMContext, bot: Bot, db: Database,
+                            base_config: Config) -> None:
     key = (await state.get_data()).get("icon_key")
-    if key not in keyboards.BUTTONS:
+    if not _valid_key(key):
         await state.clear()
         return
     emoji_id = extract_custom_emoji_id(message)
     if not emoji_id:
         await message.answer("Не вижу премиум-эмодзи 🤔 Пришли именно премиум (анимированное) эмодзи "
-                             "из набора или его ID числом.", reply_markup=keyboards.admin_icon(key, False))
+                             "из набора или его ID числом.", reply_markup=keyboards.admin_button_back(key))
         return
 
     # Проверка: пробуем отправить кнопку с этим эмодзи. Если Telegram не пропустит — не сохраняем
-    text, group = keyboards.BUTTONS[key]
     sample = keyboards.inline(keyboards.B(
-        text=keyboards.strip_leading_emoji(text), icon_custom_emoji_id=emoji_id,
-        style=runtime.current().styles.get(group), callback_data="btn:icons",
+        text=keyboards.strip_leading_emoji(keyboards.button_label(key)), icon_custom_emoji_id=emoji_id,
+        style=keyboards.button_style(key), callback_data=f"btn:b:{key}",
     ))
     failures_before = emoji_fallback.last_failure["ts"]
     try:
         await bot.send_message(message.chat.id, "Пример кнопки 👇", reply_markup=sample)
     except TelegramBadRequest as e:
-        await message.answer(f"⚠️ Telegram не принял это эмодзи: <code>{escape(e.message)}</code>")
+        await message.answer(f"⚠️ Telegram не принял это эмодзи: <code>{escape(e.message)}</code>",
+                             reply_markup=keyboards.admin_button_back(key))
         return
     if emoji_fallback.last_failure["ts"] != failures_before:
         await state.clear()
@@ -348,30 +488,31 @@ async def button_icon_input(message: Message, state: FSMContext, bot: Bot, db: D
             "⚠️ <b>Не сохранено.</b> Telegram не разрешает этому боту премиум-эмодзи на кнопках.\n\n"
             "Нужно одно из двух: у владельца бота (кто создал его в @BotFather) есть Telegram Premium, "
             "или у бота есть дополнительный username, купленный на Fragment.",
-            reply_markup=keyboards.admin_icon(key, False),
+            reply_markup=keyboards.admin_button_back(key),
         )
         return
 
-    icons = await db.get_setting("button_icons", {}) or {}
-    icons[key] = emoji_id
-    await db.set_setting("button_icons", icons)
+    await _update_setting_dict(db, "button_icons", key, emoji_id)
     await _reload(db, base_config)
     await state.clear()
-    await message.answer("✅ Сохранено. ☝️ Так кнопка выглядит у клиентов.", reply_markup=keyboards.admin_icons())
+    await message.answer("✅ Премиум-эмодзи сохранено.")
+    if key == "home":
+        await message.answer(content.t("menu_hint"), reply_markup=keyboards.home_keyboard())
+    await _send_button_screen(bot, message.chat.id, key)
 
 
 @router.callback_query(F.data.startswith("btn:x:"))
-async def button_icon_remove(callback: CallbackQuery, state: FSMContext, db: Database, config: Config,
-        base_config: Config) -> None:
+async def button_icon_remove(callback: CallbackQuery, state: FSMContext, db: Database,
+                             base_config: Config) -> None:
     await state.clear()
     key = callback.data.split(":", 2)[2]
-    icons = await db.get_setting("button_icons", {}) or {}
-    icons.pop(key, None)
-    await db.set_setting("button_icons", icons)
+    if not _valid_key(key):
+        await callback.answer()
+        return
+    await _update_setting_dict(db, "button_icons", key, None)
     await _reload(db, base_config)
     await callback.answer("Убрано")
-    await _show(callback, "✨ <b>Премиум-эмодзи на кнопках</b>\n\nВыбери кнопку. ✨ — эмодзи уже задано.",
-                keyboards.admin_icons())
+    await _show(callback, _button_text(key), keyboards.admin_button(key))
 
 
 # ================================================================ настройки

@@ -3,10 +3,12 @@
 Загружаются из базы на каждое обновление (см. middleware.py) и на каждый проход
 дожимающих сообщений, поэтому правки из админки применяются сразу, без перезапуска.
 Хранятся в таблице settings:
-    texts          — {ключ текста: шаблон}       (значения по умолчанию — в content.py)
-    button_styles  — {группа кнопок: стиль}      (primary / success / danger)
-    button_icons   — {кнопка: id премиум-эмодзи}
-    profile        — {поле Config: значение}     (имя бота/автора, поддержка, ссылки)
+    texts              — {ключ текста: шаблон}    (значения по умолчанию — в content.py)
+    button_styles      — {группа кнопок: стиль}   (primary / success / danger)
+    button_key_styles  — {кнопка: стиль}          (важнее стиля группы; plain — обычный)
+    button_icons       — {кнопка: id премиум-эмодзи}
+    button_texts       — {кнопка: текст}          (стандартные — в keyboards.BUTTONS)
+    profile            — {поле Config: значение}  (имя бота/автора, поддержка, ссылки)
 """
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
@@ -14,14 +16,16 @@ from dataclasses import dataclass, field, replace
 from .config import EDITABLE_FIELDS, Config
 from .db import Database
 
-SETTING_KEYS = ("texts", "button_styles", "button_icons", "profile")
+SETTING_KEYS = ("texts", "button_styles", "button_key_styles", "button_icons", "button_texts", "profile")
 
 
 @dataclass(frozen=True)
 class Runtime:
     texts: dict[str, str] = field(default_factory=dict)
     styles: dict[str, str] = field(default_factory=dict)
+    key_styles: dict[str, str] = field(default_factory=dict)
     icons: dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
     # Плейсхолдеры, доступные во всех текстах
     globals: dict[str, str] = field(default_factory=dict)
 
@@ -54,7 +58,9 @@ async def load(db: Database, config: Config) -> tuple[Runtime, Config]:
     rt = Runtime(
         texts=saved.get("texts") or {},
         styles=saved.get("button_styles") or {},
+        key_styles=saved.get("button_key_styles") or {},
         icons=saved.get("button_icons") or {},
+        labels=saved.get("button_texts") or {},
         globals=globals_for(cfg),
     )
     activate(rt)
