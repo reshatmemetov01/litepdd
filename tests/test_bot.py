@@ -609,12 +609,6 @@ async def scenario_menu(h: Harness) -> None:
     await h.text(uid, "/start")
     await h.click(uid, "go:continue")
 
-    def last_markup_rows():
-        return s.of(SendMessage, uid)[-1].reply_markup.inline_keyboard
-
-    def is_back(row):
-        return row[0].callback_data == "menu:back" and row[0].text == content.BACK
-
     # внизу — одна кнопка «Меню»
     hint = [r for r in s.of(SendMessage, uid) if r.text == content.MENU_HINT][0]
     assert [[b.text for b in row] for row in hint.reply_markup.keyboard] == [["Меню"]]
@@ -682,7 +676,7 @@ async def scenario_menu(h: Harness) -> None:
     # оффер из воронки (не из меню) — без «Назад»
     s.clear()
     await h.click(uid, "f:offer")
-    assert not is_back(last_markup_rows()[-1])
+    assert not is_back(s.of(SendMessage, uid)[-1].reply_markup.inline_keyboard[-1])
 
 
 async def scenario_tickets(h: Harness) -> None:
