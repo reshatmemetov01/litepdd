@@ -169,6 +169,15 @@ curl -fsSL https://raw.githubusercontent.com/reshatmemetov01/litepdd/claude/lite
 
 > Ветку можно поменять так: `curl ... | sudo BRANCH=main bash`
 
+**Если репозиторий приватный**, сервер не сможет скачать код без доступа. Два варианта:
+сделать репозиторий публичным (секретов в нём нет — токен и ID только в `.env` на сервере)
+или создать на GitHub токен только для чтения (*Settings → Developer settings → Fine-grained tokens*,
+доступ к `litepdd`, *Contents: Read-only*) и поставить так:
+
+```bash
+T=ТОКЕН; curl -fsSL -H "Authorization: token $T" https://raw.githubusercontent.com/reshatmemetov01/litepdd/claude/litepdd-bot/deploy/install.sh | sudo GITHUB_TOKEN=$T bash
+```
+
 **Обновление** — тоже одна команда:
 
 ```bash

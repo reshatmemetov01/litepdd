@@ -2,6 +2,10 @@
 # Установка бота «Лайт ПДД» на VPS (Ubuntu 22.04+ / Debian 12+) одной командой:
 #   curl -fsSL https://raw.githubusercontent.com/reshatmemetov01/litepdd/claude/litepdd-bot/deploy/install.sh | sudo bash
 #
+# Если репозиторий приватный — нужен GitHub-токен с правом чтения (Fine-grained token → Contents: Read):
+#   T=ghp_...; curl -fsSL -H "Authorization: token $T" \
+#     https://raw.githubusercontent.com/reshatmemetov01/litepdd/claude/litepdd-bot/deploy/install.sh | sudo GITHUB_TOKEN=$T bash
+#
 # Можно ставить на тот же сервер, где уже работает другой бот (например, /opt/pdd-bot):
 # у «Лайт ПДД» своя папка, свой systemd-сервис и свой системный пользователь — боты друг другу не мешают.
 # Повторный запуск безопасен: обновит код и перезапустит бота, настройки (.env) не трогает.
@@ -35,6 +39,14 @@ fi
 id "$BOT_USER" &> /dev/null || useradd --system --home "$DIR" --shell /usr/sbin/nologin "$BOT_USER"
 
 echo "==> Скачиваю код ($REPO, ветка $BRANCH)"
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  # Приватный репозиторий: токен сохраняется в $DIR/.git/config (доступен только root и боту),
+  # чтобы потом работал update.sh
+  REPO="https://x-access-token:${GITHUB_TOKEN}@${REPO#https://}"
+  if [[ -d "$DIR/.git" ]]; then
+    git -c safe.directory="$DIR" -C "$DIR" remote set-url origin "$REPO"
+  fi
+fi
 if [[ -d "$DIR/.git" ]]; then
   git -c safe.directory="$DIR" -C "$DIR" fetch -q origin "$BRANCH"
   git -c safe.directory="$DIR" -C "$DIR" checkout -q -B "$BRANCH" "origin/$BRANCH"
@@ -96,6 +108,7 @@ fi
 
 chown -R "$BOT_USER:$BOT_USER" "$DIR"
 chmod 600 "$DIR/.env"
+chmod 700 "$DIR/.git"
 
 echo "==> Включаю автозапуск"
 sed -e "s|/opt/litepdd-bot|$DIR|g" -e "s|User=litepddbot|User=$BOT_USER|" "$DIR/deploy/$SERVICE.service" \
