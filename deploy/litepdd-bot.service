@@ -1,0 +1,16 @@
+# systemd-сервис «Лайт ПДД»: бот запускается вместе с сервером и перезапускается при сбое.
+# Установка — см. раздел «Запуск на VPS» в README.md
+[Unit]
+Description=Lite PDD Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/litepdd-bot
+ExecStart=/opt/litepdd-bot/venv/bin/python -m bot
+Restart=always
+RestartSec=5
+User=litepddbot
+
+[Install]
+WantedBy=multi-user.target
